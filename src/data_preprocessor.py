@@ -29,6 +29,8 @@ class TwitterDatasetPreprocessor:
 
         self.labels: Dict[str, str] = {}
         self.source_text_fallback: Dict[str, str] = {}
+        # Backwards compatibility attribute expected by visualization/main scripts
+        self.source_tweets: Dict[str, str] = {}
         self.structure_cache: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
         self.tweet_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -72,6 +74,10 @@ class TwitterDatasetPreprocessor:
         ]
 
         self._load_dataset()
+        # Ensure ``source_tweets`` mirrors any loaded fallback text so callers that
+        # relied on the older attribute continue to function.
+        if not self.source_tweets and self.source_text_fallback:
+            self.source_tweets = dict(self.source_text_fallback)
 
     # ------------------------------------------------------------------
     # Dataset loading helpers
@@ -209,6 +215,10 @@ class TwitterDatasetPreprocessor:
             return None
 
         self.tweet_cache[tweet_id] = record
+        if is_source:
+            # Maintain compatibility with scripts that expect ``source_tweets`` to
+            # contain the root tweet text.
+            self.source_tweets[tweet_id] = record.get("text", "")
         return record
 
     def _parse_structure_lines(self, lines: List[str]) -> Dict[str, List[Dict[str, Any]]]:
@@ -341,6 +351,14 @@ class TwitterDatasetPreprocessor:
             "capital_ratio": capital_ratio,
         }
 
+    # ------------------------------------------------------------------
+    # Legacy feature API
+    # ------------------------------------------------------------------
+    def extract_features(self, text: str) -> Dict[str, float]:
+        """Preserve the previous public interface used by main/visualizer."""
+
+        return self.extract_text_features(text)
+
     def extract_user_features(self, user: Dict[str, Any]) -> Dict[str, float]:
         followers = float(user.get("followers_count", 0) or 0)
         friends = float(user.get("friends_count", 0) or 0)
@@ -361,7 +379,7 @@ class TwitterDatasetPreprocessor:
         delta = (current_time - reference_time).total_seconds()
         return float(delta)
 
-    def create_temporal_features(
+    def _create_temporal_features_from_times(
         self,
         current_time: Optional[datetime],
         root_time: Optional[datetime],
@@ -392,6 +410,46 @@ class TwitterDatasetPreprocessor:
             "has_timestamp": has_timestamp,
         }
 
+    def create_temporal_features(self, *args: Any) -> Dict[str, float]:
+        """Compatibility wrapper for temporal feature extraction.
+
+        Historically this method accepted a ``tweet_id`` and returned proxy
+        temporal features.  The rebuilt pipeline works with datetime objects,
+        so this wrapper supports both usages:
+
+        * ``create_temporal_features(tweet_id)`` – fetches the source tweet
+          metadata and returns root-level temporal features for legacy callers.
+        * ``create_temporal_features(current_time, root_time, parent_time)`` –
+          new signature leveraged by the graph reconstruction code.
+        """
+
+        if len(args) == 1 and isinstance(args[0], str):
+            tweet_id = args[0]
+            record = self._get_tweet_record(tweet_id, is_source=True)
+            if record is None:
+                return {
+                    "time_since_root_seconds": 0.0,
+                    "time_since_root_hours": 0.0,
+                    "time_since_parent_seconds": 0.0,
+                    "time_since_parent_hours": 0.0,
+                    "hour_of_day": 0.0,
+                    "day_of_week": 0.0,
+                    "day_of_month": 0.0,
+                    "has_timestamp": 0.0,
+                }
+
+            created_at = record.get("created_at_dt")
+            return self._create_temporal_features_from_times(created_at, created_at, created_at)
+
+        if len(args) == 3:
+            current_time, root_time, parent_time = args
+            return self._create_temporal_features_from_times(current_time, root_time, parent_time)
+
+        raise TypeError(
+            "create_temporal_features expects either a tweet_id string or "
+            "(current_time, root_time, parent_time) datetimes."
+        )
+
     # ------------------------------------------------------------------
     # Graph construction
     # ------------------------------------------------------------------
@@ -408,7 +466,7 @@ class TwitterDatasetPreprocessor:
         root_features.update(self.extract_text_features(source_record.get("text", "")))
         root_features.update(self.extract_user_features(source_record.get("user", {})))
         root_features.update(
-            self.create_temporal_features(root_time, root_time, root_time)
+            self._create_temporal_features_from_times(root_time, root_time, root_time)
         )
         root_features.update(
             {
@@ -445,7 +503,7 @@ class TwitterDatasetPreprocessor:
                 child_time = child_record.get("created_at_dt")
                 text_features = self.extract_text_features(child_record.get("text", ""))
                 user_features = self.extract_user_features(child_record.get("user", {}))
-                temporal_features = self.create_temporal_features(
+                temporal_features = self._create_temporal_features_from_times(
                     child_time, root_time, parent_time
                 )
 
