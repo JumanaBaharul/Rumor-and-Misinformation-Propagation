@@ -1,24 +1,34 @@
+import os
+import json
+import time
+import warnings
+from typing import Dict, List, Optional, Tuple
+
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
-from torch_geometric.data import Data, Batch
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    precision_recall_fscore_support,
+)
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, Subset
+from torch_geometric.data import Batch, Data
 from torch_geometric.loader import DataLoader as GeometricDataLoader
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, classification_report
-from sklearn.model_selection import StratifiedKFold
-import os
-import json
-from typing import Dict, List, Tuple, Optional
-import time
 from tqdm import tqdm
-import warnings
+
 warnings.filterwarnings('ignore')
 
-from .data_preprocessor import load_twitter_dataset
 from .baseline_rvnn import create_baseline_model
+from .data_preprocessor import load_twitter_dataset
 from .novel_tgnn import create_tgnn_model
 from .novel_transformer_gnn import create_transformer_gnn_model
 
@@ -28,44 +38,168 @@ class RumorDetectionTrainer:
     def __init__(self, device: str = None):
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device}")
-        
+
         self.models = {}
         self.optimizers = {}
         self.schedulers = {}
         self.training_history = {}
+        self.baseline_results: Dict[str, float] = {}
+
+    def evaluate_logistic_baseline(self, dataset) -> Dict[str, float]:
+        if len(dataset) < 4:
+            return {}
+
+        features: List[np.ndarray] = []
+        labels: List[int] = []
+
+        for data in dataset:
+            x = data.x.cpu().numpy()
+            graph_features = np.concatenate([
+                x.mean(axis=0),
+                x.max(axis=0),
+                x.min(axis=0),
+            ])
+            features.append(graph_features)
+            labels.append(int(data.y.item()))
+
+        if len(set(labels)) < 2:
+            return {}
+
+        X = np.stack(features)
+        y = np.array(labels)
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, stratify=y, random_state=42
+        )
+
+        pipeline = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "clf",
+                    LogisticRegression(
+                        max_iter=1000,
+                        multi_class="auto",
+                        class_weight="balanced",
+                    ),
+                ),
+            ]
+        )
+
+        pipeline.fit(X_train, y_train)
+        predictions = pipeline.predict(X_test)
+
+        acc = accuracy_score(y_test, predictions)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_test, predictions, average="macro", zero_division=0
+        )
+
+        self.baseline_results = {
+            "accuracy": float(acc),
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1": float(f1),
+        }
+        return self.baseline_results
         
-    def prepare_data(self, dataset_path: str, dataset_name: str = "twitter15",
-                    batch_size: int = 32, train_split: float = 0.7, 
-                    val_split: float = 0.15):
-        """Prepare data loaders for training"""
+    def prepare_data(
+        self,
+        dataset_path: str,
+        dataset_name: str = "twitter15",
+        batch_size: int = 32,
+        train_split: float = 0.7,
+        val_split: float = 0.15,
+        seed: int = 42,
+    ):
+        """Prepare stratified train/val/test splits and data loaders."""
+
         print(f"Loading dataset: {dataset_name}")
-        
-        # Load dataset
         dataset = load_twitter_dataset(dataset_path, dataset_name)
-        
-        # Get dataset statistics
-        input_size = dataset[0].x.shape[1] if len(dataset) > 0 else 22
-        num_classes = len(set(data.y.item() for data in dataset))
-        
+
+        if len(dataset) == 0:
+            raise RuntimeError("The processed dataset is empty. Verify the preprocessing pipeline and dataset files.")
+
+        input_size = dataset[0].x.shape[1]
+        labels = np.array([dataset[i].y.item() for i in range(len(dataset))])
+        num_classes = len(np.unique(labels))
+
         print(f"Dataset size: {len(dataset)}")
         print(f"Input size: {input_size}")
         print(f"Number of classes: {num_classes}")
-        
-        # Split dataset
-        total_size = len(dataset)
-        train_size = int(total_size * train_split)
-        val_size = int(total_size * val_split)
-        test_size = total_size - train_size - val_size
-        
-        train_dataset, val_dataset, test_dataset = random_split(
-            dataset, [train_size, val_size, test_size]
+
+        baseline_metrics = self.evaluate_logistic_baseline(dataset)
+        if baseline_metrics:
+            print("Logistic baseline (graph-level features):")
+            for key, value in baseline_metrics.items():
+                print(f"  {key}: {value:.4f}")
+
+        # Stratified splitting
+        if not (0 < train_split < 1):
+            raise ValueError("train_split must be between 0 and 1.")
+        if not (0 <= val_split < 1):
+            raise ValueError("val_split must be between 0 and 1.")
+
+        remaining = 1.0 - train_split
+        if remaining <= 0:
+            raise ValueError("train_split leaves no data for validation/testing.")
+
+        test_split = max(0.0, 1.0 - train_split - val_split)
+        val_ratio = 0.0
+        if remaining > 0:
+            denom = val_split + test_split
+            val_ratio = val_split / denom if denom > 0 else 0.0
+
+        indices = np.arange(len(dataset))
+        train_indices, temp_indices, train_labels, temp_labels = train_test_split(
+            indices,
+            labels,
+            test_size=remaining,
+            stratify=labels,
+            random_state=seed,
         )
-        
-        # Create data loaders
+
+        if len(temp_indices) == 0:
+            raise ValueError("Not enough data to create validation/test splits.")
+
+        if val_ratio == 0.0:
+            val_indices = np.array([], dtype=int)
+            test_indices = temp_indices
+        else:
+            test_ratio = 1.0 - val_ratio
+            val_indices, test_indices, _, _ = train_test_split(
+                temp_indices,
+                temp_labels,
+                test_size=test_ratio,
+                stratify=temp_labels,
+                random_state=seed,
+            )
+
+        train_dataset = Subset(dataset, train_indices.tolist())
+        val_dataset = Subset(dataset, val_indices.tolist()) if len(val_indices) else Subset(dataset, [])
+        test_dataset = Subset(dataset, test_indices.tolist())
+
+        def describe_split(name: str, subset) -> None:
+            size = len(subset)
+            subset_labels = [dataset[idx].y.item() for idx in subset.indices]
+            if subset_labels:
+                distribution = {label: subset_labels.count(label) for label in set(subset_labels)}
+            else:
+                distribution = {}
+            print(f"{name}: size={size}, label_distribution={distribution}")
+
+        describe_split("Train", train_dataset)
+        if len(val_dataset) > 0:
+            describe_split("Validation", val_dataset)
+        describe_split("Test", test_dataset)
+
         train_loader = GeometricDataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = GeometricDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        val_loader = (
+            GeometricDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+            if len(val_dataset) > 0
+            else None
+        )
         test_loader = GeometricDataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-        
+
         return train_loader, val_loader, test_loader, input_size, num_classes
     
     def create_models(self, input_size: int, hidden_size: int, num_classes: int):
@@ -105,12 +239,12 @@ class RumorDetectionTrainer:
             trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             print(f"{name}: {total_params:,} total parameters, {trainable_params:,} trainable")
     
-    def train_model(self, model_name: str, train_loader: GeometricDataLoader, 
-                   val_loader: GeometricDataLoader, num_epochs: int = 50,
+    def train_model(self, model_name: str, train_loader: GeometricDataLoader,
+                   val_loader: Optional[GeometricDataLoader], num_epochs: int = 50,
                    early_stopping_patience: int = 10):
         """Train a specific model"""
         print(f"\nTraining {model_name}...")
-        
+
         model = self.models[model_name]
         optimizer = self.optimizers[model_name]
         scheduler = self.schedulers[model_name]
@@ -118,7 +252,7 @@ class RumorDetectionTrainer:
         criterion = nn.CrossEntropyLoss()
         best_val_loss = float('inf')
         patience_counter = 0
-        
+
         for epoch in range(num_epochs):
             # Training phase
             model.train()
@@ -150,39 +284,40 @@ class RumorDetectionTrainer:
                 train_correct += (predicted == batch.y).sum().item()
             
             # Validation phase
-            model.eval()
-            val_loss = 0.0
-            val_correct = 0
-            val_total = 0
-            
-            with torch.no_grad():
-                for batch in val_loader:
-                    batch = batch.to(self.device)
-                    
-                    # Forward pass
-                    if model_name == 'novel_transformer_gnn':
-                        output, _ = model(batch)
-                    else:
-                        output = model(batch)
-                    
-                    # Calculate loss
-                    loss = criterion(output, batch.y)
-                    
-                    # Statistics
-                    val_loss += loss.item()
-                    _, predicted = torch.max(output.data, 1)
-                    val_total += batch.y.size(0)
-                    val_correct += (predicted == batch.y).sum().item()
-            
-            # Calculate metrics
             avg_train_loss = train_loss / len(train_loader)
-            avg_val_loss = val_loss / len(val_loader)
-            train_acc = 100 * train_correct / train_total
-            val_acc = 100 * val_correct / val_total
-            
+            train_acc = 100 * train_correct / train_total if train_total else 0.0
+
+            val_acc = train_acc
+            avg_val_loss = avg_train_loss
+
+            if val_loader is not None and len(val_loader) > 0:
+                model.eval()
+                val_loss = 0.0
+                val_correct = 0
+                val_total = 0
+
+                with torch.no_grad():
+                    for batch in val_loader:
+                        batch = batch.to(self.device)
+
+                        if model_name == 'novel_transformer_gnn':
+                            output, _ = model(batch)
+                        else:
+                            output = model(batch)
+
+                        loss = criterion(output, batch.y)
+
+                        val_loss += loss.item()
+                        _, predicted = torch.max(output.data, 1)
+                        val_total += batch.y.size(0)
+                        val_correct += (predicted == batch.y).sum().item()
+
+                avg_val_loss = val_loss / len(val_loader)
+                val_acc = 100 * val_correct / val_total if val_total else 0.0
+
             # Update learning rate
             scheduler.step(avg_val_loss)
-            
+
             # Store history
             self.training_history[model_name]['train_loss'].append(avg_train_loss)
             self.training_history[model_name]['val_loss'].append(avg_val_loss)
