@@ -2,6 +2,32 @@
 
 This repository implements an **Enhanced Graph-Based Rumor and Misinformation Propagation Detection system** based on the research paper "Propagation Tree Is Not Deep: Adaptive Graph Contrastive Learning Approach for Rumor Detection" (https://arxiv.org/pdf/2508.07201).
 
+## Why the current pipeline struggles
+
+Propagation trees are synthetic, not the real cascades. `build_propagation_graph` fabricates the reply structure with random fan-out and random node attributes instead of using the retweet/reply chains supplied in the Twitter15/16 dataset. Because the graph topology and temporal statistics are sampled independently of the labels, the models are trying to learn from noise, which drives the metrics toward chance level.
+
+Temporal features are derived from hashes of the tweet IDs. `create_temporal_features` maps each tweet ID to pseudo time-of-day, weekday, and timestamp values by modular arithmetic on the ID. These proxies do not reflect actual posting dynamics and therefore cannot encode the propagation patterns that separate rumors from non-rumors.
+
+Node features mostly reuse the source tweet features. Replies inherit the source text features (except for a few random overrides), so every node in the cascade looks almost identical. Graph encoders need discriminative node-level signals to build meaningful representations.
+
+Dataset splitting ignores class balance. The trainer performs a raw `random_split` without stratification on the heavily imbalanced Twitter15/16 labels, so some classes can disappear from the validation or test sets, making the reported precision/recall unreliable and destabilizing training.
+
+## What to do next
+
+Parse the real conversation trees. Use the `structure.txt` files in each dataset to reconstruct the genuine reply graph (tweet IDs, parent IDs, timestamps). Once you build the actual propagation tree, you can attach credible temporal intervals (time since source, depth in cascade) instead of synthetic numbers.
+
+Recompute node features from each tweet’s content and metadata. For every node in the reconstructed tree, load the associated tweet text from `tweets/<tweet_id>.json` (or the provided text dump) and extract textual, sentiment, and user features per node. Reserve global features (e.g., total cascade size) for graph-level attributes.
+
+Derive temporal encodings from real timestamps. Convert the tweet creation times into relative delays (seconds/minutes since the root), absolute clock features, and rolling statistics such as growth rate. Temporal Graph Networks will only benefit if these values mirror actual diffusion speed.
+
+Add edge direction and type information from the dataset. Distinguish between reply, retweet, and quotation edges if available, and store the parent-child order so temporal models can process streams chronologically.
+
+Adopt stratified or event-based splits. Replace the plain `random_split` with stratified sampling (e.g., `StratifiedKFold`) or leave-one-event-out evaluation to keep label proportions stable across train/val/test sets.
+
+Benchmark against simpler baselines. Before fine-tuning the TGNN or Transformer-GNN, evaluate logistic regression or traditional GCNs on graph-level features to verify that the processed data carries predictive signal.
+
+Tune hyperparameters with validation curves. Once the data pipeline is trustworthy, search learning rates, hidden sizes, dropout, and training epochs—especially important for small datasets like Twitter15/16.
+
 ## 🚀 **NOVELTY & ENHANCEMENTS**
 
 ### **Beyond the Base Paper:**
@@ -52,49 +78,58 @@ Rumor and Misinformation Propagation/
 
 ## 🛠️ **Installation**
 
-1. **Clone the repository:**
-```bash
-git clone <repository-url>
-cd "Rumor and Misinformation Propagation"
-```
+Follow these commands in the VS Code terminal to set up the project locally:
 
-2. **Install dependencies:**
-```bash
-pip install -r requirements.txt
-```
+1. **Clone the repository and enter the project directory**
+   ```bash
+   git clone https://github.com/JumanaBaharul/Rumor-and-Misinformation-Propagation.git
+   cd Rumor-and-Misinformation-Propagation
+   ```
 
-3. **Verify installation:**
-```bash
-python test_installation.py
-```
+2. **(Optional) Create and activate a virtual environment**
+   ```bash
+   python -m venv .venv
+   # macOS/Linux
+   source .venv/bin/activate
+   # Windows PowerShell
+   .venv\Scripts\Activate.ps1
+   ```
+
+3. **Install the required dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **(Optional) Verify your Python environment**
+   ```bash
+   python -m compileall src
+   ```
+
+5. **Run the full pipeline**
+   ```bash
+   python main.py
+   ```
+
+6. **Review results and artifacts**
+   ```bash
+   ls outputs
+   ```
 
 ## 🚀 **Quick Start**
 
 ### **Option 1: Full Pipeline Execution**
 ```bash
-python main_execution.py
+python main.py
 ```
 
 ### **Option 2: Quick Demo**
 ```bash
-python main_execution.py --demo
+python main.py --demo
 ```
 
-### **Option 3: Individual Components**
-
-#### **Dataset Visualization:**
+### **Option 3: Help**
 ```bash
-python dataset_visualizer.py
-```
-
-#### **Enhanced Preprocessing:**
-```bash
-python enhanced_preprocessor.py
-```
-
-#### **Model Testing:**
-```bash
-python enhanced_rvnn_model.py
+python main.py --help
 ```
 
 ## 📊 **Dataset Processing**
