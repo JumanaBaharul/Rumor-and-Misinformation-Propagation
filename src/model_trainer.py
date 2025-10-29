@@ -21,6 +21,7 @@ from .data_preprocessor import load_twitter_dataset
 from .baseline_rvnn import create_baseline_model
 from .novel_tgnn import create_tgnn_model
 from .novel_transformer_gnn import create_transformer_gnn_model
+from .enhanced_models import create_enhanced_model
 
 class RumorDetectionTrainer:
     """Comprehensive trainer for rumor detection models with comparison"""
@@ -87,13 +88,34 @@ class RumorDetectionTrainer:
             input_size, hidden_size, num_classes, model_type="transformer_gnn"
         ).to(self.device)
         
+        # Enhanced models with better architectures
+        self.models['enhanced_tgnn'] = create_enhanced_model(
+            input_size, hidden_size, num_classes, model_type="enhanced_tgnn"
+        ).to(self.device)
+        
+        self.models['improved_transformer_gnn'] = create_enhanced_model(
+            input_size, hidden_size, num_classes, model_type="improved_transformer_gnn"
+        ).to(self.device)
+        
+        self.models['advanced_rvnn'] = create_enhanced_model(
+            input_size, hidden_size, num_classes, model_type="advanced_rvnn"
+        ).to(self.device)
+        
         # Create optimizers and schedulers for each model
         for name, model in self.models.items():
+            # Use better learning rates for enhanced models
+            if 'enhanced' in name or 'improved' in name or 'advanced' in name:
+                lr = 0.0005  # Slightly lower learning rate for stability
+                weight_decay = 0.005  # Moderate regularization
+            else:
+                lr = 0.001
+                weight_decay = 0.01
+            
             self.optimizers[name] = optim.AdamW(
-                model.parameters(), lr=0.001, weight_decay=0.01
+                model.parameters(), lr=lr, weight_decay=weight_decay
             )
             self.schedulers[name] = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizers[name], mode='min', factor=0.5, patience=5
+                self.optimizers[name], mode='min', factor=0.7, patience=5
             )
             self.training_history[name] = {
                 'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []

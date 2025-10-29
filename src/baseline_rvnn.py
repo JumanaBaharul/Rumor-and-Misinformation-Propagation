@@ -141,12 +141,6 @@ class BaselineRvNNModel(nn.Module):
         num_nodes = x.size(0)
         device = x.device
         
-        # Debug information
-        print(f"DEBUG: x shape: {x.shape}, edge_index shape: {edge_index.shape}")
-        print(f"DEBUG: edge_index type: {type(edge_index)}, edge_index.dtype: {edge_index.dtype}")
-        print(f"DEBUG: edge_index device: {edge_index.device}")
-        print(f"DEBUG: edge_index requires_grad: {edge_index.requires_grad}")
-        
         # Build adjacency list
         adj_list = [[] for _ in range(num_nodes)]
         

@@ -225,9 +225,6 @@ class TemporalGraphNeuralNetwork(nn.Module):
             # If we have [num_nodes, batch_size, hidden_size], reduce first dimension
             x_pooled = torch.mean(x_pooled, dim=0)
         
-        # Debug: print shapes to understand the issue
-        print(f"DEBUG TGNN: x_pooled shape: {x_pooled.shape}, batch.y shape: {data.y.shape}")
-        
         # Simple classification without complex temporal modeling
         output = self.classifier(x_pooled)
         
