@@ -20,6 +20,7 @@ from rumor_detection import (
     dataset_summary,
     evaluate_model,
     load_twitter_dataset,
+    normalise_node_features,
     save_json,
     set_global_seed,
 )
@@ -48,11 +49,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument(
+        "--no-feature-normalisation",
+        dest="normalise_features",
+        action="store_false",
+        help="Disable z-score normalisation applied to node features.",
+    )
+    parser.add_argument(
+        "--no-balanced-sampler",
+        dest="use_balanced_sampler",
+        action="store_false",
+        help="Disable the class-balanced sampler for the training loader.",
+    )
+    parser.add_argument(
         "--models",
         nargs="+",
         default=["enhanced_tgnn", "improved_transformer_gnn", "advanced_rvnn"],
         help="List of model identifiers to train",
     )
+    parser.set_defaults(normalise_features=True, use_balanced_sampler=True)
     return parser.parse_args()
 
 
@@ -61,6 +75,8 @@ def serialise_metrics(metrics: Dict[str, object]) -> Dict[str, object]:
     for key, value in metrics.items():
         if isinstance(value, np.ndarray):
             serialised[key] = value.tolist()
+        elif torch.is_tensor(value):
+            serialised[key] = value.cpu().tolist()
         else:
             serialised[key] = value
     return serialised
@@ -78,6 +94,8 @@ def main() -> None:
         val_ratio=args.val_ratio,
         max_samples=args.max_samples,
         seed=args.seed,
+        normalise_features=args.normalise_features,
+        use_balanced_sampler=args.use_balanced_sampler,
     )
     model_config = ModelConfig(
         hidden_size=args.hidden_size,
@@ -100,6 +118,30 @@ def main() -> None:
     summary = dataset_summary(dataset)
     print(f"Loaded {summary['num_samples']} samples with {summary['num_features']} features")
     print(f"Label distribution: {summary['label_distribution']}")
+
+    feature_stats_payload = None
+    if data_config.normalise_features:
+        print("🧮 Applying z-score normalisation to node features")
+        raw_stats = normalise_node_features(dataset)
+        mean_abs = raw_stats["mean"].abs().mean().item()
+        std_mean = raw_stats["std"].mean().item()
+        post_stack = torch.cat([data.x for data in dataset], dim=0)
+        post_mean_abs = post_stack.abs().mean().item()
+        post_std_mean = post_stack.std(dim=0).mean().item()
+        print(
+            "   → Pre-normalisation |mean|: "
+            f"{mean_abs:.4e}, avg std: {std_mean:.4e}; "
+            "post-normalisation |mean|: "
+            f"{post_mean_abs:.4f}, avg std: {post_std_mean:.4f}"
+        )
+        feature_stats_payload = {
+            "mean": raw_stats["mean"],
+            "std": raw_stats["std"],
+            "pre_mean_abs": mean_abs,
+            "pre_std_mean": std_mean,
+            "post_mean_abs": post_mean_abs,
+            "post_std_mean": post_std_mean,
+        }
 
     print("📦 Creating data loaders...")
     train_loader, val_loader, test_loader, splits = create_data_loaders(dataset, data_config)
@@ -162,6 +204,8 @@ def main() -> None:
             f"recall={metrics['recall']:.4f}, "
             f"f1={metrics['f1']:.4f}"
         )
+        print("Confusion matrix:")
+        print(np.asarray(metrics["confusion_matrix"]))
 
     experiment_record = {
         "dataset": summary,
@@ -175,6 +219,12 @@ def main() -> None:
             "f1": best_f1,
         },
     }
+
+    if feature_stats_payload is not None:
+        experiment_record["feature_normalisation"] = {
+            key: value.tolist() if torch.is_tensor(value) else value
+            for key, value in feature_stats_payload.items()
+        }
 
     save_json(experiment_record, result_dir / "enhanced_models_results.json")
 

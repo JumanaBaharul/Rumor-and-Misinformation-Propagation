@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from textblob import TextBlob
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader as GeometricDataLoader
+from torch.utils.data import WeightedRandomSampler
 
 from ..config import DataConfig
 
@@ -222,6 +223,7 @@ class TwitterRumorDataset:
         self._data_list: List[Data] = []
         self._labels: List[int] = []
         self._label_mapping: Dict[str, int] = {}
+        self._feature_stats: Optional[Dict[str, torch.Tensor]] = None
         self._load()
 
     def _load(self) -> None:
@@ -247,6 +249,35 @@ class TwitterRumorDataset:
 
     def __iter__(self) -> Iterable[Data]:
         return iter(self._data_list)
+
+    @property
+    def feature_stats(self) -> Optional[Dict[str, torch.Tensor]]:
+        return self._feature_stats
+
+    @feature_stats.setter
+    def feature_stats(self, value: Optional[Dict[str, torch.Tensor]]) -> None:
+        self._feature_stats = value
+
+
+def normalise_node_features(dataset: TwitterRumorDataset) -> Dict[str, torch.Tensor]:
+    """Apply feature-wise z-score normalisation across all graphs."""
+
+    if len(dataset) == 0:
+        stats = {"mean": torch.tensor([]), "std": torch.tensor([])}
+        dataset.feature_stats = stats
+        return stats
+
+    stacked = torch.cat([data.x for data in dataset], dim=0)
+    mean = stacked.mean(dim=0)
+    std = stacked.std(dim=0)
+    std[std == 0] = 1.0
+
+    for data in dataset:
+        data.x = (data.x - mean) / std
+
+    stats = {"mean": mean, "std": std}
+    dataset.feature_stats = stats
+    return stats
 
 
 # ----------------------------------------------------------------------
@@ -280,11 +311,17 @@ def _stratified_split(indices: np.ndarray, labels: np.ndarray, *, train_ratio: f
     )
 
     val_relative = val_ratio / (val_ratio + test_ratio)
+    temp_labels = labels[temp_idx]
+    if use_stratify:
+        stratify_second_split = np.all(np.bincount(temp_labels, minlength=len(label_counts)) >= 2)
+    else:
+        stratify_second_split = False
+
     val_idx, test_idx = train_test_split(
         temp_idx,
         test_size=1.0 - val_relative,
         random_state=seed,
-        stratify=labels[temp_idx] if use_stratify else None,
+        stratify=temp_labels if stratify_second_split else None,
     )
 
     return train_idx, val_idx, test_idx
@@ -314,7 +351,22 @@ def create_data_loaders(
         "pin_memory": torch.cuda.is_available(),
     }
 
-    train_loader = GeometricDataLoader(train_subset, shuffle=True, **loader_kwargs)
+    sampler = None
+    shuffle = True
+    if config.use_balanced_sampler:
+        class_weights = compute_class_weights(labels[train_idx], num_classes=len(dataset.label_mapping))
+        sample_weights = class_weights[torch.tensor(labels[train_idx], dtype=torch.long)]
+        sampler = WeightedRandomSampler(sample_weights.double().tolist(), len(train_idx), replacement=True)
+        shuffle = False
+
+    drop_last = config.batch_size > 1 and (len(train_subset) % config.batch_size == 1)
+    train_loader = GeometricDataLoader(
+        train_subset,
+        shuffle=shuffle,
+        sampler=sampler,
+        drop_last=drop_last,
+        **loader_kwargs,
+    )
     val_loader = GeometricDataLoader(val_subset, shuffle=False, **loader_kwargs)
     test_loader = GeometricDataLoader(test_subset, shuffle=False, **loader_kwargs)
     splits = {
@@ -356,4 +408,5 @@ __all__ = [
     "create_data_loaders",
     "compute_class_weights",
     "dataset_summary",
+    "normalise_node_features",
 ]

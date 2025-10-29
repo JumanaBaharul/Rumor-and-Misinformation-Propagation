@@ -8,6 +8,7 @@ from .data import (
     create_data_loaders,
     dataset_summary,
     load_twitter_dataset,
+    normalise_node_features,
 )
 from .evaluation import build_detailed_report, compute_classification_metrics, evaluate_model
 from .models import MODEL_REGISTRY, AdvancedRvNN, EnhancedTGNN, ImprovedTransformerGNN, build_model
@@ -25,6 +26,7 @@ __all__ = [
     "create_data_loaders",
     "dataset_summary",
     "load_twitter_dataset",
+    "normalise_node_features",
     "build_detailed_report",
     "compute_classification_metrics",
     "evaluate_model",

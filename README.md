@@ -5,7 +5,8 @@ This repository contains an end-to-end PyTorch Geometric pipeline for training a
 ## Highlights
 - **Modular package design** – reusable components for data preprocessing, model construction, training, and evaluation.
 - **Enhanced architectures** – attention-based temporal GNN, transformer-GNN hybrid, and an improved recursive neural network baseline.
-- **Robust training loop** – stratified splits, class-balanced loss, learning-rate scheduling, gradient clipping, and early stopping by macro F1 score.
+- **Robust training loop** – stratified splits, class-balanced loss + sampler, feature normalisation, learning-rate scheduling, gradient clipping, and early stopping by macro F1 score.
+- **Balanced inputs** – automatic z-score normalisation of node features and an optional class-balanced sampler for every batch.
 - **Structured experiment outputs** – automatic checkpointing and JSON summaries containing metrics and training histories.
 
 ## Project layout
@@ -49,6 +50,8 @@ Useful flags:
 --max-samples 200            # limit samples for quick smoke tests
 --models enhanced_tgnn improved_transformer_gnn
 --output-dir custom_outputs  # change output location
+--no-feature-normalisation   # disable z-score normalisation if needed
+--no-balanced-sampler        # fall back to uniform random sampling
 ```
 
 The script writes model checkpoints to `outputs/models/` and a JSON experiment report to `outputs/results/enhanced_models_results.json`.

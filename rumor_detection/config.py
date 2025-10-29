@@ -22,6 +22,8 @@ class DataConfig:
     max_samples: Optional[int] = None
     seed: int = 42
     num_workers: int = 0
+    normalise_features: bool = True
+    use_balanced_sampler: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

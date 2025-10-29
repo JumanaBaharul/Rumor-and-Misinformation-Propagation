@@ -52,9 +52,15 @@ class ModelTrainer:
         history = {
             "train_loss": [],
             "val_loss": [],
+            "train_accuracy": [],
+            "val_accuracy": [],
             "train_f1": [],
             "val_f1": [],
             "val_macro_f1": [],
+            "train_precision": [],
+            "train_recall": [],
+            "val_precision": [],
+            "val_recall": [],
         }
 
         best_macro_f1 = -float("inf")
@@ -67,15 +73,24 @@ class ModelTrainer:
 
             history["train_loss"].append(train_result.loss)
             history["val_loss"].append(val_result.loss)
+            history["train_accuracy"].append(train_result.metrics["accuracy"])
+            history["val_accuracy"].append(val_result.metrics["accuracy"])
             history["train_f1"].append(train_result.metrics["f1"])
             history["val_f1"].append(val_result.metrics["f1"])
             history["val_macro_f1"].append(val_result.metrics["macro_f1"])
+            history["train_precision"].append(train_result.metrics["precision"])
+            history["train_recall"].append(train_result.metrics["recall"])
+            history["val_precision"].append(val_result.metrics["precision"])
+            history["val_recall"].append(val_result.metrics["recall"])
 
             if (epoch == 1) or (epoch % self.training_config.log_every == 0):
                 print(
                     f"Epoch {epoch:03d} | "
                     f"train_loss: {train_result.loss:.4f} | "
+                    f"train_acc: {train_result.metrics['accuracy']:.4f} | "
+                    f"train_f1: {train_result.metrics['f1']:.4f} | "
                     f"val_loss: {val_result.loss:.4f} | "
+                    f"val_acc: {val_result.metrics['accuracy']:.4f} | "
                     f"val_f1: {val_result.metrics['f1']:.4f} | "
                     f"val_macro_f1: {val_result.metrics['macro_f1']:.4f}"
                 )
