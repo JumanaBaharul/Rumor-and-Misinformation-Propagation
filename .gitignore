@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+outputs/
+outputs_test/
+.DS_Store
+.idea/
+.vscode/
