@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-path", default="data/Rumor Detection Dataset (Twitter15 and Twitter16)")
     parser.add_argument("--dataset-name", default="twitter15")
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--train-ratio", type=float, default=0.7)
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--max-samples", type=int, default=None)
@@ -45,6 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--label-smoothing", type=float, default=0.05)
+    parser.add_argument("--edge-dropout", type=float, default=0.15)
+    parser.add_argument("--feature-dropout", type=float, default=0.1)
+    parser.add_argument("--swa-start", type=int, default=40)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-dir", default="outputs")
@@ -61,12 +66,18 @@ def parse_args() -> argparse.Namespace:
         help="Disable the class-balanced sampler for the training loader.",
     )
     parser.add_argument(
+        "--no-swa",
+        dest="use_swa",
+        action="store_false",
+        help="Disable stochastic weight averaging for the last training phase.",
+    )
+    parser.add_argument(
         "--models",
         nargs="+",
         default=["enhanced_tgnn", "improved_transformer_gnn", "advanced_rvnn"],
         help="List of model identifiers to train",
     )
-    parser.set_defaults(normalise_features=True, use_balanced_sampler=True)
+    parser.set_defaults(normalise_features=True, use_balanced_sampler=True, use_swa=True)
     return parser.parse_args()
 
 
@@ -90,6 +101,7 @@ def main() -> None:
         dataset_path=args.dataset_path,
         dataset_name=args.dataset_name,
         batch_size=args.batch_size,
+        num_workers=args.num_workers,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
         max_samples=args.max_samples,
@@ -111,7 +123,15 @@ def main() -> None:
         grad_clip=args.grad_clip,
         device=args.device,
         log_every=max(1, args.log_every),
+        label_smoothing=args.label_smoothing,
+        edge_dropout=args.edge_dropout,
+        feature_dropout=args.feature_dropout,
+        use_swa=args.use_swa,
+        swa_start=args.swa_start,
     )
+
+    if training_config.use_swa and training_config.swa_start >= training_config.epochs:
+        training_config.swa_start = max(1, training_config.epochs // 2)
 
     print("🚀 Loading dataset...")
     dataset = load_twitter_dataset(data_config)

@@ -5,7 +5,8 @@ This repository contains an end-to-end PyTorch Geometric pipeline for training a
 ## Highlights
 - **Modular package design** – reusable components for data preprocessing, model construction, training, and evaluation.
 - **Enhanced architectures** – attention-based temporal GNN, transformer-GNN hybrid, and an improved recursive neural network baseline.
-- **Robust training loop** – stratified splits, class-balanced loss + sampler, feature normalisation, learning-rate scheduling, gradient clipping, and early stopping by macro F1 score.
+- **Robust training loop** – stratified splits, class-balanced loss + sampler, feature normalisation, scheduled learning rates, gradient clipping, stochastic weight averaging, and early stopping by macro F1 score.
+- **Regularised optimisation** – label smoothing, feature/edge dropout augmentation, and automatic batch-norm updates for the averaged model to squeeze out extra accuracy.
 - **Balanced inputs** – automatic z-score normalisation of node features and an optional class-balanced sampler for every batch.
 - **Structured experiment outputs** – automatic checkpointing and JSON summaries containing metrics and training histories.
 
@@ -52,6 +53,11 @@ Useful flags:
 --output-dir custom_outputs  # change output location
 --no-feature-normalisation   # disable z-score normalisation if needed
 --no-balanced-sampler        # fall back to uniform random sampling
+--label-smoothing 0.02       # tune label smoothing for cross-entropy
+--edge-dropout 0.1           # drop edges during training for regularisation
+--feature-dropout 0.15       # drop node features during training
+--swa-start 50               # delay stochastic weight averaging start epoch
+--no-swa                     # disable SWA entirely
 ```
 
 The script writes model checkpoints to `outputs/models/` and a JSON experiment report to `outputs/results/enhanced_models_results.json`.
@@ -59,7 +65,7 @@ The script writes model checkpoints to `outputs/models/` and a JSON experiment r
 ## Configuration overview
 - `DataConfig`: dataset path, batching, train/validation ratios, and reproducibility settings.
 - `ModelConfig`: hidden size, depth, dropout, and attention head count shared across enhanced models.
-- `TrainingConfig`: optimisation hyper-parameters, device selection, gradient clipping, and logging cadence.
+- `TrainingConfig`: optimisation hyper-parameters, device selection, gradient clipping, logging cadence, label smoothing, feature/edge dropout, and stochastic weight averaging controls.
 
 All configurations are created internally from CLI flags and serialised in the experiment report.
 

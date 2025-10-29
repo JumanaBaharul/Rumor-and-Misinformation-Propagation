@@ -54,6 +54,11 @@ class TrainingConfig:
     grad_clip: float = 1.0
     device: str = "auto"
     log_every: int = 10
+    label_smoothing: float = 0.05
+    edge_dropout: float = 0.15
+    feature_dropout: float = 0.1
+    use_swa: bool = True
+    swa_start: int = 30
 
     def resolve_device(self) -> torch.device:
         """Return the torch device specified by the configuration."""

@@ -7,8 +7,11 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.swa_utils import AveragedModel, update_bn
+from torch_geometric.utils import dropout_edge
 
 from ..config import TrainingConfig
 from ..evaluation.metrics import compute_classification_metrics
@@ -35,7 +38,11 @@ class ModelTrainer:
         self.device = training_config.resolve_device()
         self.model.to(self.device)
 
-        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(self.device) if class_weights is not None else None)
+        weight = class_weights.to(self.device) if class_weights is not None else None
+        self.criterion = nn.CrossEntropyLoss(
+            weight=weight,
+            label_smoothing=max(0.0, min(0.49, training_config.label_smoothing)),
+        )
         self.optimizer = AdamW(
             self.model.parameters(),
             lr=training_config.learning_rate,
@@ -47,6 +54,12 @@ class ModelTrainer:
             patience=max(2, training_config.patience // 3),
             factor=0.5,
         )
+        self.edge_dropout = max(0.0, min(0.9, training_config.edge_dropout))
+        self.feature_dropout = max(0.0, min(0.9, training_config.feature_dropout))
+        self.use_swa = training_config.use_swa
+        self.swa_start = max(1, training_config.swa_start)
+        self.swa_model: Optional[AveragedModel] = AveragedModel(self.model) if self.use_swa else None
+        self._swa_active = False
 
     def fit(self, train_loader, val_loader) -> Dict[str, List[float]]:
         history = {
@@ -97,6 +110,10 @@ class ModelTrainer:
 
             self.scheduler.step(val_result.metrics["macro_f1"])
 
+            if self.swa_model is not None and epoch >= self.swa_start:
+                self.swa_model.update_parameters(self.model)
+                self._swa_active = True
+
             if val_result.metrics["macro_f1"] > best_macro_f1:
                 best_macro_f1 = val_result.metrics["macro_f1"]
                 best_state = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
@@ -106,8 +123,23 @@ class ModelTrainer:
                 if patience_counter >= self.training_config.patience:
                     break
 
-        if best_state is not None:
-            self.model.load_state_dict(best_state)
+        final_state = best_state
+        final_score = best_macro_f1
+
+        if self.swa_model is not None and self._swa_active:
+            swa_module = self.swa_model.module
+            swa_module.to(self.device)
+            if self._model_has_batch_norm(swa_module):
+                update_bn(train_loader, swa_module, device=self.device)
+            swa_state = swa_module.state_dict()
+            self.model.load_state_dict(swa_state)
+            swa_val = self.evaluate(val_loader)
+            if swa_val.get("macro_f1", float("-inf")) > final_score:
+                final_state = {k: v.cpu().clone() for k, v in swa_state.items()}
+                final_score = swa_val["macro_f1"]
+
+        if final_state is not None:
+            self.model.load_state_dict(final_state)
 
         return history
 
@@ -124,6 +156,19 @@ class ModelTrainer:
 
         for batch in loader:
             batch = batch.to(self.device)
+            if train:
+                if self.edge_dropout > 0.0:
+                    edge_attr = getattr(batch, "edge_attr", None)
+                    edge_index, edge_mask = dropout_edge(
+                        batch.edge_index,
+                        p=self.edge_dropout,
+                        training=True,
+                    )
+                    batch.edge_index = edge_index
+                    if edge_attr is not None:
+                        batch.edge_attr = edge_attr[edge_mask]
+                if self.feature_dropout > 0.0:
+                    batch.x = F.dropout(batch.x, p=self.feature_dropout, training=True)
             logits = self.model(batch)
             loss = self.criterion(logits, batch.y)
 
@@ -148,6 +193,10 @@ class ModelTrainer:
     def evaluate(self, loader) -> Dict[str, float]:
         result = self._run_epoch(loader, train=False)
         return {"loss": result.loss, **result.metrics}
+
+    @staticmethod
+    def _model_has_batch_norm(model: nn.Module) -> bool:
+        return any(isinstance(module, nn.modules.batchnorm._BatchNorm) for module in model.modules())
 
 
 __all__ = ["ModelTrainer", "EpochResult"]
