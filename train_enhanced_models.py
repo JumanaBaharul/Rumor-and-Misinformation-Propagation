@@ -112,6 +112,7 @@ def main() -> None:
 
     results: Dict[str, Dict[str, object]] = {}
     histories: Dict[str, Dict[str, List[float]]] = {}
+    summary_rows: Dict[str, Dict[str, float]] = {}
     best_model_name = None
     best_f1 = -float("inf")
 
@@ -135,6 +136,18 @@ def main() -> None:
 
         metrics = evaluate_model(trainer.model, test_loader, device)
         results[model_name] = serialise_metrics(metrics)
+        summary_rows[model_name] = {
+            key: float(metrics[key]) if key in metrics else None
+            for key in (
+                "accuracy",
+                "precision",
+                "recall",
+                "f1",
+                "macro_precision",
+                "macro_recall",
+                "macro_f1",
+            )
+        }
 
         torch.save(trainer.model.state_dict(), model_dir / f"{model_name}.pt")
 
@@ -164,6 +177,38 @@ def main() -> None:
     }
 
     save_json(experiment_record, result_dir / "enhanced_models_results.json")
+
+    if summary_rows:
+        print("\n" + "=" * 60)
+        print("FINAL RESULTS SUMMARY")
+        print("=" * 60)
+        header = (
+            f"{'Model':<28}"
+            f"{'Acc.':>8}"
+            f"{'Prec.':>8}"
+            f"{'Recall':>8}"
+            f"{'F1':>8}"
+            f"{'mPrec.':>8}"
+            f"{'mRecall':>9}"
+            f"{'mF1':>8}"
+        )
+        print(header)
+        print("-" * len(header))
+        
+        def format_value(value: float | None, width: int) -> str:
+            return f"{value:>{width}.4f}" if value is not None else f"{'n/a':>{width}}"
+
+        for model_name, metrics in summary_rows.items():
+            print(
+                f"{model_name:<28}"
+                f"{format_value(metrics['accuracy'], 8)}"
+                f"{format_value(metrics['precision'], 8)}"
+                f"{format_value(metrics['recall'], 8)}"
+                f"{format_value(metrics['f1'], 8)}"
+                f"{format_value(metrics['macro_precision'], 8)}"
+                f"{format_value(metrics['macro_recall'], 9)}"
+                f"{format_value(metrics['macro_f1'], 8)}"
+            )
 
     if best_model_name is not None:
         print(f"\n🏆 Best model: {best_model_name} (F1={best_f1:.4f})")

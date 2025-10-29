@@ -14,9 +14,17 @@ from sklearn.metrics import (
 
 def compute_classification_metrics(labels: Sequence[int], predictions: Sequence[int]) -> Dict[str, float]:
     accuracy = accuracy_score(labels, predictions)
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average="weighted")
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        labels,
+        predictions,
+        average="weighted",
+        zero_division=0,
+    )
     macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
-        labels, predictions, average="macro"
+        labels,
+        predictions,
+        average="macro",
+        zero_division=0,
     )
 
     return {
@@ -32,7 +40,7 @@ def compute_classification_metrics(labels: Sequence[int], predictions: Sequence[
 
 def build_detailed_report(labels: Sequence[int], predictions: Sequence[int]) -> Dict[str, object]:
     cm = confusion_matrix(labels, predictions)
-    report = classification_report(labels, predictions, output_dict=True)
+    report = classification_report(labels, predictions, output_dict=True, zero_division=0)
     metrics = compute_classification_metrics(labels, predictions)
     metrics.update({
         "confusion_matrix": cm,
